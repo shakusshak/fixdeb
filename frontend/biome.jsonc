@@ -1,0 +1,208 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": ["ultracite/core", "ultracite/react"],
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "defaultBranch": "master"
+  },
+  "files": {
+    "ignoreUnknown": false,
+    "includes": [
+      "**/*",
+      "!**/routeTree.gen.ts",
+      "!**/protogen",
+      "!**/protogen/**/*",
+      "!**/dist/**/*",
+      "!**/build/**/*",
+      "!**/out/**/*",
+      "!**/coverage/**/*",
+      "!**/.nyc_output/**/*",
+      "!**/*.css",
+      "!**/tests/global-setup.mjs",
+      "!**/tests/console",
+      "!**/tests/console-enterprise",
+      "!**/components/redpanda-ui",
+      "!**/assets/rp-connect-schema-full.json",
+      "!**/components/ui"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "formatWithErrors": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 120,
+    "attributePosition": "auto",
+    "bracketSpacing": true
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": {
+          "level": "on",
+          "options": {
+            "groups": [":PACKAGE:", ":BLANK_LINE:", ["@/**"], ":BLANK_LINE:", ["./**"]]
+          }
+        },
+        "useSortedAttributes": "on",
+        "useSortedKeys": "off"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "correctness": {
+        "useImageSize": "off",
+        "useJsonImportAttributes": "error" // this may slow down the linting process
+      },
+      "nursery": {
+        "noReactForwardRef": "off", // enable once we use React 19+
+        "noDeprecatedImports": "error", // this may slow down the linting process
+        "noFloatingPromises": "off", // Disabled - navigate() and similar fire-and-forget promises are intentional
+        "noMisusedPromises": "error", // this may slow down the linting process
+        "noImportCycles": "off", // this may slow down the linting process
+        "useExhaustiveSwitchCases": "error" // this may slow down the linting process
+      },
+      "style": {
+        "noDefaultExport": "off",
+        "noRestrictedImports": {
+          "level": "warn",
+          "options": {
+            "paths": {
+              "@redpanda-data/ui": "Deprecated — use components from 'components/redpanda-ui/' instead",
+              "@chakra-ui/react": "Deprecated — use Registry components + Tailwind instead",
+              "mobx": "Deprecated — use Zustand instead",
+              "mobx-react-lite": "Deprecated — use Zustand instead",
+              "yup": "Deprecated — use Zod instead"
+            }
+          }
+        },
+        "useConsistentTypeDefinitions": {
+          "level": "error",
+          "options": {
+            "style": "type"
+          }
+        },
+        "useReactFunctionComponents": "off"
+      },
+      "suspicious": {
+        "noConsole": "error"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "arrowParentheses": "always",
+      "bracketSameLine": false,
+      "quoteStyle": "single",
+      "quoteProperties": "asNeeded",
+      "semicolons": "always",
+      "trailingCommas": "es5"
+    },
+    "jsxRuntime": "reactClassic"
+  },
+  "json": {
+    "assist": {
+      "enabled": false
+    },
+    "formatter": {
+      "enabled": true,
+      "indentStyle": "space",
+      "indentWidth": 2,
+      "lineEnding": "lf",
+      "lineWidth": 120,
+      "trailingCommas": "none"
+    },
+    "parser": {
+      "allowComments": false,
+      "allowTrailingCommas": false
+    }
+  },
+  "css": {
+    "formatter": {
+      "lineEnding": "lf",
+      "lineWidth": 120,
+      "quoteStyle": "single"
+    },
+    "parser": {
+      "allowWrongLineComments": false,
+      "cssModules": false,
+      "tailwindDirectives": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.{test,spec}.{ts,tsx,js,jsx}", "**/__tests__/**/*"],
+      "javascript": {
+        "globals": ["vi"]
+      },
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["**/scripts/**/*", "**/bin/**/*", "*.mjs", "*.cjs", "**/tests/**/*", "**/tests/*.sh"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["**/*.d.ts", "**/{env,global,types}.d.ts"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedVariables": "off",
+            "noUndeclaredVariables": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["**/dist/**/*", "**/build/**/*", "**/out/**/*", "**/coverage/**/*", ".env", ".env.*"],
+      "formatter": {
+        "enabled": false
+      },
+      "linter": {
+        "enabled": false
+      }
+    },
+    {
+      "includes": [
+        "package.json",
+        "{tsconfig,jsconfig}.json",
+        "tsconfig.*.json",
+        ".vscode/*.json",
+        ".github/**/*.json"
+      ],
+      "json": {
+        "parser": {
+          "allowComments": true,
+          "allowTrailingCommas": true
+        }
+      }
+    },
+    {
+      "includes": ["**/routes/**/*"],
+      "linter": {
+        "rules": {
+          "style": {
+            "useFilenamingConvention": "off"
+          }
+        }
+      }
+    }
+  ]
+}

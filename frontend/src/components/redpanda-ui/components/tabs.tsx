@@ -1,0 +1,241 @@
+'use client';
+
+import { Tabs as TabsPrimitive } from '@base-ui/react/tabs';
+import { cva, type VariantProps } from 'class-variance-authority';
+import React from 'react';
+
+import { DragScrollArea } from './drag-scroll-area';
+import { cn, type SharedProps } from '../lib/utils';
+
+const tabsVariants = cva('flex data-[orientation=horizontal]:flex-col', {
+  variants: {
+    size: {
+      sm: 'gap-1',
+      md: 'gap-2',
+      lg: 'gap-3',
+      xl: 'gap-4',
+      full: 'w-full gap-2',
+    },
+    variant: {
+      default: '',
+      card: 'rounded-xl border bg-card',
+      contained: 'rounded-lg bg-muted',
+    },
+  },
+  defaultVariants: {
+    size: 'md',
+    variant: 'default',
+  },
+});
+
+type TabsProps = TabsPrimitive.Root.Props & VariantProps<typeof tabsVariants> & SharedProps;
+
+function Tabs({ className, size, variant, testId, ...props }: TabsProps) {
+  return (
+    <TabsPrimitive.Root
+      className={cn(tabsVariants({ size, variant }), className)}
+      data-slot="tabs"
+      data-testid={testId}
+      {...props}
+    />
+  );
+}
+
+const tabsListVariants = cva(
+  'inline-flex h-10 items-center justify-center text-muted-foreground data-[orientation=vertical]:h-fit data-[orientation=vertical]:flex-col',
+  {
+    variants: {
+      variant: {
+        default: 'w-fit gap-1 rounded-lg bg-muted p-1',
+        underline: '!border-border relative w-full justify-start rounded-t-xl border-b bg-background py-0 text-current',
+      },
+      layout: {
+        auto: '',
+        equal: 'grid',
+        full: 'w-full',
+      },
+      gap: {
+        none: '',
+        sm: 'gap-1',
+        md: 'gap-2',
+        lg: 'gap-3',
+      },
+    },
+    defaultVariants: {
+      variant: 'default',
+      layout: 'auto',
+      gap: 'none',
+    },
+  }
+);
+
+const tabsListActiveVariants = cva('rounded-sm bg-background shadow-sm', {
+  variants: {
+    variant: {
+      default: '',
+      underline:
+        "rounded-none bg-transparent shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-selected after:content-[''] data-[orientation=vertical]:after:top-0 data-[orientation=vertical]:after:-right-px data-[orientation=vertical]:after:bottom-0 data-[orientation=vertical]:after:left-auto data-[orientation=vertical]:after:h-auto data-[orientation=vertical]:after:w-0.5",
+    },
+  },
+  defaultVariants: {
+    variant: 'default',
+  },
+});
+
+type TabsListProps = TabsPrimitive.List.Props &
+  VariantProps<typeof tabsListVariants> &
+  SharedProps & {
+    activeClassName?: string;
+    columns?: number;
+  };
+
+function TabsList({
+  children,
+  className,
+  activeClassName,
+  variant,
+  layout,
+  gap,
+  columns,
+  testId,
+  style,
+  ...props
+}: TabsListProps) {
+  // To make an overflowing strip drag-scrollable, wrap <TabsList> in <DragScrollArea> and add
+  // `w-max min-w-full` to size the list to its content. See the scrollable tabs demos.
+  return (
+    <TabsPrimitive.List
+      className={cn('relative', tabsListVariants({ variant, layout, gap }), className)}
+      data-slot="tabs-list"
+      data-testid={testId}
+      style={
+        layout === 'equal' && columns ? { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, ...style } : style
+      }
+      {...props}
+    >
+      {/* Base UI exposes the active tab's position/size as `--active-tab-*` vars; the perpendicular axis isn't transitioned so the highlight snaps across rows/columns. */}
+      <TabsPrimitive.Indicator
+        aria-hidden
+        className={cn(
+          'pointer-events-none absolute z-0 h-(--active-tab-height) w-(--active-tab-width) duration-200 ease-out data-[orientation=horizontal]:transition-[left,width] data-[orientation=vertical]:transition-[top,height] motion-reduce:transition-none',
+          'top-(--active-tab-top) left-(--active-tab-left)',
+          tabsListActiveVariants({ variant }),
+          activeClassName
+        )}
+        data-slot="tabs-list-highlight"
+      />
+      {children}
+    </TabsPrimitive.List>
+  );
+}
+
+type ScrollableTabsListProps = TabsListProps & {
+  // Classes for the scroll viewport (the DragScrollArea wrapper) — `className`/`style` go to the
+  // list itself, so use this to size or constrain the viewport, e.g. `scrollAreaClassName="max-w-sm"`.
+  scrollAreaClassName?: string;
+  // Width of the edge fade in px (forwarded to DragScrollArea).
+  fadeSize?: number;
+};
+
+// Keep the bottom 4px opaque through the edge fade so the baseline border and active indicator
+// (`after:-bottom-px after:h-0.5`, ~3px tall) stay crisp; still well below the label baseline.
+const UNDERLINE_OPAQUE_PX = 4;
+
+/**
+ * `TabsList` pre-composed with `DragScrollArea` for overflowing strips: handles the content sizing
+ * (`w-max min-w-full`) and, for `underline`, the wrapper padding and crisp baseline. Drop in for
+ * `TabsList` when the strip can overflow.
+ */
+function ScrollableTabsList({ className, scrollAreaClassName, fadeSize, variant, ...props }: ScrollableTabsListProps) {
+  const underline = variant === 'underline';
+  return (
+    <DragScrollArea
+      className={cn(underline && 'pb-px', scrollAreaClassName)}
+      fadeSize={fadeSize}
+      preserveBottomEdge={underline ? UNDERLINE_OPAQUE_PX : 0}
+    >
+      <TabsList className={cn('w-max min-w-full', className)} variant={variant} {...props} />
+    </DragScrollArea>
+  );
+}
+
+const tabsTriggerVariants = cva(
+  // Base UI uses `aria-disabled`/`data-disabled` (not native `disabled`) and `data-active`, so target those.
+  'z-[1] inline-flex size-full cursor-pointer items-center justify-center whitespace-nowrap rounded-sm font-medium text-sm ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[orientation=vertical]:w-full data-[orientation=vertical]:justify-start data-[active]:text-foreground',
+  {
+    variants: {
+      variant: {
+        default: 'px-3 py-1.5 hover:text-foreground dark:hover:text-foreground',
+        underline: 'px-4 py-2 text-muted-foreground data-[active]:text-selected',
+      },
+    },
+    defaultVariants: {
+      variant: 'default',
+    },
+  }
+);
+
+type TabsTriggerProps = TabsPrimitive.Tab.Props &
+  SharedProps & {
+    variant?: VariantProps<typeof tabsTriggerVariants>['variant'];
+  };
+
+function TabsTrigger({ className, value, variant, testId, render, ...props }: TabsTriggerProps) {
+  // For a non-button render (e.g. `<a href>` link tabs), tell Base UI to polyfill button semantics instead of asserting a native button.
+  const isNonButtonElement = typeof render === 'object' && render !== null && 'type' in render;
+  const nativeButton =
+    isNonButtonElement && typeof render.type === 'string' && render.type !== 'button' ? false : undefined;
+
+  return (
+    <TabsPrimitive.Tab
+      className={cn(tabsTriggerVariants({ variant }), className)}
+      data-slot="tabs-trigger"
+      data-testid={testId}
+      data-value={value}
+      nativeButton={nativeButton}
+      render={render}
+      value={value}
+      {...props}
+    />
+  );
+}
+
+type TabsContentProps = TabsPrimitive.Panel.Props & SharedProps;
+
+function TabsContent({ className, children, testId, ...props }: TabsContentProps) {
+  return (
+    <TabsPrimitive.Panel
+      className={cn('flex-1 space-y-6 outline-none data-ending-style:hidden', className)}
+      data-slot="tabs-content"
+      data-testid={testId}
+      {...props}
+    >
+      {children}
+    </TabsPrimitive.Panel>
+  );
+}
+
+type TabsContentsProps = React.ComponentProps<'div'>;
+
+function TabsContents({ children, className, ...props }: TabsContentsProps) {
+  return (
+    <div className={cn('overflow-visible', className)} data-slot="tabs-contents" {...props}>
+      {children}
+    </div>
+  );
+}
+
+export {
+  Tabs,
+  TabsList,
+  ScrollableTabsList,
+  TabsTrigger,
+  TabsContent,
+  TabsContents,
+  type TabsProps,
+  type TabsListProps,
+  type ScrollableTabsListProps,
+  type TabsTriggerProps,
+  type TabsContentProps,
+  type TabsContentsProps,
+};

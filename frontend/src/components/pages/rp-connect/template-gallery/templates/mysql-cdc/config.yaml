@@ -1,0 +1,38 @@
+input:
+  mysql_cdc:
+    # ── Connection (filled in from the form) ────────────────────────────────
+    dsn: ${slot.dsn}                       # format user:pass@tcp(host:3306)/database
+    tables:                                # BARE names, no `db.` prefix (database comes from the DSN)
+      - ${slot.includedTable}
+    # flavor: mysql                        # use 'mariadb' for MariaDB clusters
+    # tls:
+    #   skip_cert_verify: true             # only for servers with self-signed certificates
+
+    # ── Snapshot of existing rows before streaming changes ──────────────────
+    stream_snapshot: false                 # required field — enable to seed existing data
+    # snapshot_max_batch_size: 1000        # only relevant while snapshotting
+
+    # ── Binlog tuning (benchmark-tuned batch; other knobs at engine defaults) ──
+    batching:
+      count: 5000
+      period: 1s
+    checkpoint_cache: mysql_cdc_checkpoint # cache resource storing binlog position (defined below)
+    # checkpoint_limit: 1024               # outstanding messages before backpressure
+
+    # ── Error handling ──────────────────────────────────────────────────────
+    # auto_replay_nacks: true              # default — re-deliver NACKed messages
+
+output:
+  redpanda:
+    seed_brokers:
+      - ${REDPANDA_BROKERS}
+    topic: ${slot.targetTopic}
+
+    # Engine defaults (max_in_flight 256, idempotent writes) are already tuned; batching happens
+    # on the CDC input.
+    compression: snappy
+
+cache_resources:
+  # Persists the binlog position so restarts resume instead of re-snapshotting.
+  - label: mysql_cdc_checkpoint
+    memory: {}                             # swap for a persistent cache to resume across restarts

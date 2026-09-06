@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package redpanda.api.console.v1alpha1;
+
+import "buf/validate/validate.proto";
+import "redpanda/api/console/v1alpha1/common.proto";
+
+// PublishMessageRequest is the request for PublishMessage call.
+message PublishMessageRequest {
+  string topic = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_len = 249,
+    (buf.validate.field).string.pattern = "^[a-zA-Z0-9._\\-]*$"
+  ]; // The topics to publish to.
+  int32 partition_id = 2 [(buf.validate.field).int32 = {gte: -1}]; // -1 for automatic partition assignment.
+  CompressionType compression = 3; // The compression to be used.
+  bool use_transactions = 4; // Use transactions.
+  repeated KafkaRecordHeader headers = 5; // Kafka record headers.
+  PublishMessagePayloadOptions key = 6;
+  PublishMessagePayloadOptions value = 7;
+}
+
+message PublishMessagePayloadOptions {
+  PayloadEncoding encoding = 1; // Payload encoding to use.
+  bytes data = 2; // Data.
+  optional int32 schema_id = 9; // Optional schema ID.
+  optional int32 index = 10; // Deprecated single-index. Prefer index_path for Protobuf messages so nested types are addressable.
+  repeated int32 index_path = 11; // Optional message-index path for Protobuf. Each element selects the Nth nested MessageDescriptor; e.g. [0] = first top-level, [1, 0] = first nested message of the second top-level. Empty = first top-level.
+}
+
+// PublishMessageResponse is the response for PublishMessage call.
+message PublishMessageResponse {
+  string topic = 1;
+  int32 partition_id = 2;
+  int64 offset = 3;
+}
+
+// GenerateSchemaSampleRequest asks for a zero-valued JSON skeleton for the schema identified
+// by schema_id. The backend dispatches based on the schema's registered type (AVRO/PROTOBUF/JSON).
+// index_path is only consulted for Protobuf and is the Confluent message-indexes path.
+message GenerateSchemaSampleRequest {
+  int32 schema_id = 1 [(buf.validate.field).int32.gt = 0];
+  repeated int32 index_path = 2;
+}
+
+// GenerateSchemaSampleResponse returns the JSON skeleton.
+message GenerateSchemaSampleResponse {
+  string sample_json = 1;
+}

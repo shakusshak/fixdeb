@@ -1,0 +1,273 @@
+/**
+ * Copyright 2026 Redpanda Data, Inc.
+ *
+ * Use of this software is governed by the Business Source License
+ * included in the file https://github.com/redpanda-data/redpanda/blob/dev/licenses/bsl.md
+ *
+ * As of the Change Date specified in that file, in accordance with
+ * the Business Source License, use of this software will be governed
+ * by the Apache License, Version 2.0
+ */
+
+import { Link, useLocation } from '@tanstack/react-router';
+import { Avatar, AvatarFallback, AvatarImage } from 'components/redpanda-ui/components/avatar';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from 'components/redpanda-ui/components/dropdown-menu';
+import { RedpandaLogo } from 'components/redpanda-ui/components/redpanda-logo';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  useSidebar,
+} from 'components/redpanda-ui/components/sidebar';
+import { ChevronsLeft, ChevronsRight, ChevronUp, LogOut } from 'lucide-react';
+import type React from 'react';
+import { useEffect } from 'react';
+import { createGroupedSidebarItems, type SidebarGroupedItems } from 'utils/route-utils';
+
+import { AuthenticationMethod } from '../../protogen/redpanda/api/console/v1alpha1/authentication_pb';
+import { api, useApiStoreHook } from '../../state/backend-api';
+import { useSupportedFeaturesStore } from '../../state/supported-features';
+import { AppFeatures } from '../../utils/env';
+import { getUserInitials } from '../../utils/string';
+
+function SidebarLogo() {
+  const { state, isMobile } = useSidebar();
+
+  const isExpanded = isMobile || state === 'expanded';
+
+  return (
+    <Link aria-label="Go to Overview" className="flex items-center" to="/overview">
+      <RedpandaLogo
+        className={isExpanded ? 'h-6 w-auto text-white' : 'h-6 w-6'}
+        variant={isExpanded ? 'horizontal' : 'mark'}
+      />
+    </Link>
+  );
+}
+
+function SidebarCollapseToggle() {
+  const { toggleSidebar, state } = useSidebar();
+  const isExpanded = state === 'expanded';
+
+  return (
+    <SidebarMenuButton
+      aria-expanded={isExpanded}
+      aria-label={isExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+      onClick={toggleSidebar}
+      tooltip={isExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+    >
+      {isExpanded ? (
+        <ChevronsLeft aria-hidden="true" className="size-4" />
+      ) : (
+        <ChevronsRight aria-hidden="true" className="size-4" />
+      )}
+      <span className="group-data-[collapsible=icon]:hidden">{isExpanded ? 'Collapse sidebar' : 'Expand sidebar'}</span>
+    </SidebarMenuButton>
+  );
+}
+
+const UserProfile = () => {
+  const { state, isMobile, setOpenMobile } = useSidebar();
+  useApiStoreHook((s) => s.userData); // re-render when userData changes
+
+  useEffect(() => {
+    api.refreshUserData().catch(() => {
+      // Error handling managed by API layer
+    });
+  }, []);
+
+  if (!(AppFeatures.SINGLE_SIGN_ON && api.userData)) {
+    return null;
+  }
+
+  if (api.userData.authenticationMethod === AuthenticationMethod.NONE) {
+    return null;
+  }
+
+  const user = api.userData;
+  const initials = getUserInitials(user.displayName);
+
+  const handleMenuItemClick = () => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+  };
+
+  const isCollapsed = state === 'collapsed';
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <SidebarMenuButton
+            aria-label={`User menu for ${user.displayName}`}
+            className="data-[popup-open]:bg-sidebar-accent data-[popup-open]:text-sidebar-accent-foreground"
+            size={isCollapsed ? 'default' : 'lg'}
+            tooltip={isCollapsed ? user.displayName : undefined}
+          >
+            <Avatar className={isCollapsed ? 'h-7 w-7 shrink-0' : 'h-8 w-8 shrink-0'}>
+              <AvatarImage alt="" src={user.avatarUrl} />
+              <AvatarFallback aria-hidden="true" className="bg-primary font-medium text-primary-foreground text-xs">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            {!isCollapsed && (
+              <>
+                <div className="grid flex-1 text-left leading-tight">
+                  <span className="truncate text-label">{user.displayName}</span>
+                  <span className="truncate text-body text-sidebar-foreground/60">Preferences</span>
+                </div>
+                <ChevronUp aria-hidden="true" className="ml-auto size-4" />
+              </>
+            )}
+          </SidebarMenuButton>
+        }
+      />
+      <DropdownMenuContent align="end" className="w-56 rounded-lg" side={isMobile ? 'bottom' : 'top'}>
+        <DropdownMenuLabel>
+          <div className="flex flex-col">
+            <span className="text-body-sm">Signed in as</span>
+            <span className="text-body text-muted-foreground">{user.displayName}</span>
+          </div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onClick={async () => {
+            handleMenuItemClick();
+            await api.logout();
+            window.location.reload();
+          }}
+        >
+          <LogOut aria-hidden="true" className="mr-2 h-4 w-4" />
+          Logout
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
+
+type NavItemProps = {
+  item: SidebarGroupedItems['items'][number];
+  isActive: boolean;
+  onNavClick: () => void;
+};
+
+function SidebarNavItem({ item, isActive, onNavClick }: NavItemProps) {
+  const Icon = item.icon;
+  const titleString = typeof item.title === 'string' ? item.title : item.to;
+
+  const itemContent = (
+    <>
+      {Icon ? <Icon aria-hidden="true" className="size-4 shrink-0" /> : null}
+      <span className="group-data-[collapsible=icon]:hidden">{item.title}</span>
+    </>
+  );
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        aria-current={isActive ? 'page' : undefined}
+        aria-disabled={item.isDisabled}
+        className={item.isDisabled ? 'cursor-not-allowed opacity-50' : ''}
+        disabled={item.isDisabled}
+        isActive={isActive}
+        render={
+          item.isDisabled ? undefined : (
+            <Link aria-current={isActive ? 'page' : undefined} onClick={onNavClick} to={item.to} />
+          )
+        }
+        tooltip={item.isDisabled ? { children: item.disabledText } : titleString}
+      >
+        {item.isDisabled ? <span className="flex items-center gap-2">{itemContent}</span> : itemContent}
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+const SidebarNavigation = () => {
+  const location = useLocation();
+  const { isMobile, setOpenMobile } = useSidebar();
+  useSupportedFeaturesStore((s) => s.endpointCompatibility); // re-render when endpoint compatibility loads
+  const groupedItems = createGroupedSidebarItems();
+
+  const handleNavClick = () => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+  };
+
+  return (
+    <nav aria-label="Main navigation">
+      {groupedItems.map((section) => (
+        <SidebarGroup key={section.group}>
+          <SidebarGroupLabel>{section.group}</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {section.items.map((item) => {
+                const isActive =
+                  location.pathname === item.to ||
+                  (item.to !== '/overview' && location.pathname.startsWith(`${item.to}/`));
+                return <SidebarNavItem isActive={isActive} item={item} key={item.to} onNavClick={handleNavClick} />;
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      ))}
+    </nav>
+  );
+};
+
+export function AppSidebar() {
+  return (
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <div className="mt-3.5 flex items-center px-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+          <SidebarLogo />
+        </div>
+      </SidebarHeader>
+
+      <SidebarContent>
+        <SidebarNavigation />
+      </SidebarContent>
+
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <UserProfile />
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarCollapseToggle />
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+    </Sidebar>
+  );
+}
+
+type SidebarLayoutProps = {
+  children: React.ReactNode;
+};
+
+export function SidebarLayout({ children }: SidebarLayoutProps) {
+  return (
+    <SidebarProvider>
+      <AppSidebar />
+      {children}
+    </SidebarProvider>
+  );
+}

@@ -1,0 +1,175 @@
+/**
+ * Copyright 2025 Redpanda Data, Inc.
+ *
+ * Use of this software is governed by the Business Source License
+ * included in the file https://github.com/redpanda-data/redpanda/blob/dev/licenses/bsl.md
+ *
+ * As of the Change Date specified in that file, in accordance with
+ * the Business Source License, use of this software will be governed
+ * by the Apache License, Version 2.0
+ */
+
+import { Alert, AlertDescription } from 'components/redpanda-ui/components/alert';
+import { Button } from 'components/redpanda-ui/components/button';
+import { Card, CardContent, CardHeader, CardTitle } from 'components/redpanda-ui/components/card';
+import { CodeBlock, Pre } from 'components/redpanda-ui/components/code-block';
+import { AlertCircle, Info, Lock, SearchX } from 'lucide-react';
+
+const ShadowingDescription = () => (
+  <>
+    <div className="text-body">
+      Shadowing protects your data from regional outages. It continuously replicates topics to a separate cluster in a
+      different region, creating an up-to-date backup.
+    </div>
+    <div className="text-body">
+      Think of it as an insurance policy for your data. The source cluster handles all production traffic, while the
+      shadow cluster maintains a read-only copy. If your primary region goes down, you can quickly switch to the shadow
+      cluster with minimal data loss.
+    </div>
+    <div className="text-body">
+      Shadowing preserves everything: your data, offsets, timestamps, and consumer positions. This means your
+      applications can resume exactly where they left off after a failover.
+    </div>
+  </>
+);
+
+type ShadowLinkEmptyStateProps = {
+  onCreateClick: () => void;
+};
+
+export const ShadowLinkEmptyState = ({ onCreateClick }: ShadowLinkEmptyStateProps) => (
+  <Card size={'full'}>
+    <CardHeader>
+      <CardTitle>Shadowing</CardTitle>
+    </CardHeader>
+    <CardContent className="flex flex-col gap-3">
+      <ShadowingDescription />
+      <div className="text-body">Create a shadow link to connect your source cluster to your shadow cluster.</div>
+      <div>
+        <Button onClick={onCreateClick} testId="create-shadowlink-button">
+          Create shadow link
+        </Button>
+      </div>
+    </CardContent>
+  </Card>
+);
+
+export const ShadowLinkEmptyStateCloud = ({ onCreateClick }: ShadowLinkEmptyStateProps) => (
+  <Card size={'full'}>
+    <CardHeader>
+      <CardTitle>Shadowing</CardTitle>
+    </CardHeader>
+    <CardContent className="flex flex-col gap-3">
+      <ShadowingDescription />
+      <div className="text-body">Create a shadow link to connect your source cluster to your shadow cluster.</div>
+      <div>
+        <Button onClick={onCreateClick} testId="create-shadowlink-button">
+          Create shadow link in Redpanda Cloud
+        </Button>
+      </div>
+    </CardContent>
+  </Card>
+);
+
+export const ShadowLinkNoPermissionState = () => (
+  <Card data-testid="shadowlink-no-permission-card" size="full">
+    <CardHeader>
+      <CardTitle>Shadowing</CardTitle>
+    </CardHeader>
+    <CardContent className="flex flex-col gap-3">
+      <ShadowingDescription />
+      <Alert icon={<Lock />} variant="warning">
+        <AlertDescription>
+          You don't have permission to view shadow links on this cluster. Contact an administrator if you need access.
+        </AlertDescription>
+      </Alert>
+    </CardContent>
+  </Card>
+);
+
+export const ShadowLinkFeatureDisabledState = () => (
+  <Card data-testid="shadowlink-feature-disabled-card" size="full">
+    <CardHeader>
+      <CardTitle>Shadowing</CardTitle>
+    </CardHeader>
+    <CardContent className="flex flex-col gap-3">
+      <ShadowingDescription />
+      <div className="text-body">To get started, run the following command to enable Shadowing on your cluster:</div>
+      <CodeBlock testId="shadowlink-enable-command">
+        <Pre>rpk cluster config set enable_shadow_linking true</Pre>
+      </CodeBlock>
+    </CardContent>
+  </Card>
+);
+
+export const ShadowLinkUnavailableState = () => (
+  <Card data-testid="shadowlink-unavailable-card" size="full">
+    <CardHeader>
+      <CardTitle>Shadowing</CardTitle>
+    </CardHeader>
+    <CardContent className="flex flex-col gap-3">
+      <ShadowingDescription />
+      <Alert icon={<Info />} variant="warning">
+        <AlertDescription>
+          Shadowing is not available for this cluster. This feature requires a Redpanda cluster with the Admin API
+          enabled.
+        </AlertDescription>
+      </Alert>
+    </CardContent>
+  </Card>
+);
+
+type ShadowLinkErrorStateProps = {
+  errorMessage: string;
+  onRetry: () => void;
+};
+
+export const ShadowLinkErrorState = ({ errorMessage, onRetry }: ShadowLinkErrorStateProps) => (
+  <Card data-testid="shadowlink-error-card" size="full">
+    <CardHeader>
+      <CardTitle>Error loading shadow links</CardTitle>
+    </CardHeader>
+    <CardContent className="flex flex-col gap-3">
+      <div className="text-body">An error occurred while loading shadow links:</div>
+      <div className="text-body text-destructive">{errorMessage}</div>
+      <div>
+        <Button data-testid="shadowlink-retry-button" onClick={onRetry} variant="primary">
+          Retry
+        </Button>
+      </div>
+    </CardContent>
+  </Card>
+);
+
+type ShadowLinkNotFoundStateProps = {
+  name: string;
+  onBackClick: () => void;
+};
+
+export const ShadowLinkNotFoundState = ({ name, onBackClick }: ShadowLinkNotFoundStateProps) => (
+  <div className="flex h-64 items-center justify-center">
+    <div className="flex flex-col items-center gap-4">
+      <SearchX className="h-12 w-12 text-muted-foreground" />
+      <div className="text-base">Shadow link "{name}" not found</div>
+      <div className="text-body text-muted-foreground">
+        The shadow link may have been deleted or the name is incorrect.
+      </div>
+      <Button data-testid="shadowlink-back-button" onClick={onBackClick} variant="outline">
+        Back to Shadow Links
+      </Button>
+    </div>
+  </div>
+);
+
+type ShadowLinkLoadErrorStateProps = {
+  errorMessage: string;
+};
+
+export const ShadowLinkLoadErrorState = ({ errorMessage }: ShadowLinkLoadErrorStateProps) => (
+  <div className="flex h-64 items-center justify-center">
+    <div className="flex items-center gap-2 text-error">
+      <AlertCircle className="h-6 w-6" />
+      <div className="text-body">Error loading shadow link: {errorMessage}</div>
+    </div>
+  </div>
+);

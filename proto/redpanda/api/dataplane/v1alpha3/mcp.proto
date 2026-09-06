@@ -1,0 +1,628 @@
+syntax = "proto3";
+
+package redpanda.api.dataplane.v1alpha3;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/field_mask.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+import "redpanda/api/auth/v1/authorization.proto";
+import "redpanda/api/common/v1/linthint.proto";
+import "redpanda/api/common/v1/options.proto";
+import "redpanda/api/dataplane/v1/pipeline.proto";
+
+// Defines the MCP server resource.
+message MCPServer {
+  option (google.api.resource) = {
+    type: "redpanda.api.dataplane.v1alpha3/MCPServer"
+    singular: "mcp_server"
+    plural: "mcp_servers"
+  };
+  // Unique identifier for the MCP server.
+  string id = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9-_/]+$"
+  ];
+
+  // User-friendly MCP server name.
+  string display_name = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9-_ /]+$",
+    (buf.validate.field).string.min_len = 3,
+    (buf.validate.field).string.max_len = 128
+  ];
+
+  // Optional MCP server description.
+  string description = 3 [(buf.validate.field).string.max_len = 256];
+
+  // A configuration tool for the MCP server.
+  message Tool {
+    // Component type for this tool.
+    enum ComponentType {
+      COMPONENT_TYPE_UNSPECIFIED = 0;
+      COMPONENT_TYPE_PROCESSOR = 1;
+      COMPONENT_TYPE_CACHE = 2;
+      COMPONENT_TYPE_INPUT = 3;
+      COMPONENT_TYPE_OUTPUT = 4;
+    }
+
+    ComponentType component_type = 1 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+
+    // The contents of the configuration tool in YAML format.
+    string config_yaml = 2 [
+      (google.api.field_behavior) = REQUIRED,
+      (buf.validate.field).required = true,
+      (buf.validate.field).string.min_len = 1
+    ];
+  }
+
+  // All the configuration tools for the MCP server.
+  // The key in the map is the name of the tool.
+  map<string, Tool> tools = 4 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).map.min_pairs = 1,
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "Map of tool names to their configurations. Each tool defines a capability that the MCP server exposes."}
+  ];
+
+  // The number of resources that are guaranteed to be assigned to the MCP server.
+  redpanda.api.dataplane.v1.Pipeline.Resources resources = 5 [(grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "The requested amount of resources for the MCP server. Depending on the backend, the resources might be guaranteed, or might be tweaked based on the utilization of the MCP server."}];
+
+  // Tags are key-value pairs that can be assigned to a MCP server resource.
+  // They help organize MCP servers and enable filtering when listing them.
+  map<string, string> tags = 6 [(buf.validate.field).map = {
+    max_pairs: 16
+    values: {string: {pattern: "^([\\p{L}\\p{Z}\\p{N}_.:/=+\\-@]*)$"}}
+  }];
+
+  // The current MCP server state.
+  State state = 7 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Current status of the MCP server, including error information if applicable.
+  Status status = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // URL to connect to the MCP server.
+  string url = 9 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // State of the MCP server.
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // The MCP server is starting.
+    STATE_STARTING = 1;
+    // The MCP server is running.
+    STATE_RUNNING = 2;
+    // The MCP server is in the process of stopping.
+    STATE_STOPPING = 3;
+    // The MCP server is stopped and in paused state.
+    STATE_STOPPED = 4;
+    // The MCP server encountered an error.
+    STATE_ERROR = 5;
+  }
+
+  // MCP server status may contain an error message.
+  message Status {
+    // Error message if the MCP server is in an error state. Empty if no error.
+    string error = 1;
+  }
+}
+
+// MCPServer is the service for MCP servers.
+// It exposes the API for creating and managing MCP servers and their configurations.
+service MCPServerService {
+  option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_tag) = {
+    name: "Remote MCP"
+    description: "Create and manage MCP servers and their configurations."
+  };
+
+  // CreateMCPServer creates an MCP server in the Redpanda cluster.
+  rpc CreateMCPServer(CreateMCPServerRequest) returns (CreateMCPServerResponse) {
+    option (google.api.http) = {
+      post: "/v1alpha3/redpanda-connect/mcp-servers"
+      body: "mcp_server"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Create MCP server"
+      description: "Create a new MCP server."
+      responses: {
+        key: "201"
+        value: {
+          description: "OK"
+          schema: {json_schema: {ref: ".redpanda.api.dataplane.v1alpha3.MCPServer"}}
+        }
+      }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_MCP_SERVER
+    };
+    option (redpanda.api.common.v1.method_authorization) = {
+      resource_type: "mcpservers"
+      permission: "dataplane_mcpserver_create"
+    };
+  }
+
+  // GetMCPServer gets a specific MCP server.
+  rpc GetMCPServer(GetMCPServerRequest) returns (GetMCPServerResponse) {
+    option (google.api.http) = {get: "/v1alpha3/redpanda-connect/mcp-servers/{id}"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Get MCP server"
+      description: "Get a specific MCP server."
+      responses: {
+        key: "200"
+        value: {
+          description: "OK"
+          schema: {json_schema: {ref: ".redpanda.api.dataplane.v1alpha3.MCPServer"}}
+        }
+      }
+      responses: {
+        key: "404"
+        value: {
+          description: "Not Found"
+          schema: {json_schema: {ref: ".google.rpc.Status"}}
+        }
+      }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_MCP_SERVER
+    };
+    option (redpanda.api.common.v1.method_authorization) = {
+      resource_type: "mcpservers"
+      id_getter_cel: "request.id"
+      permission: "dataplane_mcpserver_get"
+    };
+  }
+
+  // Lists all MCP servers in the Redpanda cluster.
+  rpc ListMCPServers(ListMCPServersRequest) returns (ListMCPServersResponse) {
+    option (google.api.http) = {get: "/v1alpha3/redpanda-connect/mcp-servers"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "List MCP servers"
+      description: "Lists MCP servers. Optionally filter by display name, tags, or secret ID."
+      responses: {
+        key: "200"
+        value: {
+          description: "OK"
+          schema: {json_schema: {ref: ".redpanda.api.dataplane.v1alpha3.ListMCPServersResponse"}}
+        }
+      }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_MCP_SERVER
+    };
+    option (redpanda.api.common.v1.collection_authorization) = {
+      collection_getter_cel: "response.mcp_servers"
+      each: {
+        resource_type: "mcpservers"
+        id_getter_cel: "each.id"
+        permission: "dataplane_mcpserver_list"
+      }
+    };
+  }
+
+  // Updates a specific MCP server configuration.
+  rpc UpdateMCPServer(UpdateMCPServerRequest) returns (UpdateMCPServerResponse) {
+    option (google.api.http) = {
+      put: "/v1alpha3/redpanda-connect/mcp-servers/{id}"
+      body: "mcp_server"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Update an MCP server"
+      description: "Update the configuration of an MCP server."
+      responses: {
+        key: "200"
+        value: {
+          description: "OK"
+          schema: {json_schema: {ref: ".redpanda.api.dataplane.v1alpha3.MCPServer"}}
+        }
+      }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_MCP_SERVER
+    };
+    option (redpanda.api.common.v1.method_authorization) = {
+      resource_type: "mcpservers"
+      id_getter_cel: "request.id"
+      permission: "dataplane_mcpserver_update"
+    };
+  }
+
+  // DeleteMCPServer deletes a specific MCP server.
+  rpc DeleteMCPServer(DeleteMCPServerRequest) returns (DeleteMCPServerResponse) {
+    option (google.api.http) = {delete: "/v1alpha3/redpanda-connect/mcp-servers/{id}"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Delete an MCP server"
+      description: "Delete an MCP server."
+      responses: {
+        key: "204"
+        value: {
+          description: "Deleted"
+          schema: {}
+        }
+      }
+      responses: {
+        key: "404"
+        value: {
+          description: "Not Found"
+          schema: {json_schema: {ref: ".google.rpc.Status"}}
+        }
+      }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_MCP_SERVER
+    };
+    option (redpanda.api.common.v1.method_authorization) = {
+      resource_type: "mcpservers"
+      id_getter_cel: "request.id"
+      permission: "dataplane_mcpserver_delete"
+    };
+  }
+
+  // StopMCPServer stops a specific MCP server.
+  rpc StopMCPServer(StopMCPServerRequest) returns (StopMCPServerResponse) {
+    option (google.api.http) = {post: "/v1alpha3/redpanda-connect/mcp-servers/{id}:stop"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Stop an MCP server"
+      description: "Stop a running MCP server."
+      responses: {
+        key: "200"
+        value: {
+          description: "Stopped"
+          schema: {json_schema: {ref: ".redpanda.api.dataplane.v1alpha3.MCPServer"}}
+        }
+      }
+      responses: {
+        key: "404"
+        value: {
+          description: "Not Found"
+          schema: {json_schema: {ref: ".google.rpc.Status"}}
+        }
+      }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_MCP_SERVER
+    };
+    option (redpanda.api.common.v1.method_authorization) = {
+      resource_type: "mcpservers"
+      id_getter_cel: "request.id"
+      permission: "dataplane_mcpserver_delete"
+    };
+  }
+
+  // StartMCPServer starts a specific MCP server that has been previously stopped.
+  rpc StartMCPServer(StartMCPServerRequest) returns (StartMCPServerResponse) {
+    option (google.api.http) = {post: "/v1alpha3/redpanda-connect/mcp-servers/{id}:start"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Start an MCP server"
+      description: "Start a stopped MCP server."
+      responses: {
+        key: "200"
+        value: {
+          description: "Started"
+          schema: {json_schema: {ref: ".redpanda.api.dataplane.v1alpha3.MCPServer"}}
+        }
+      }
+      responses: {
+        key: "404"
+        value: {
+          description: "Not Found"
+          schema: {json_schema: {ref: ".google.rpc.Status"}}
+        }
+      }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_EDIT
+      api: API_MCP_SERVER
+    };
+    option (redpanda.api.common.v1.method_authorization) = {
+      resource_type: "mcpservers"
+      id_getter_cel: "request.id"
+      permission: "dataplane_mcpserver_create"
+    };
+  }
+
+  // Returns the configuration schema for MCP server tools, including available components and processors.
+  rpc GetMCPServerServiceConfigSchema(GetMCPServerServiceConfigSchemaRequest) returns (GetMCPServerServiceConfigSchemaResponse) {
+    option (google.api.http) = {get: "/v1alpha3/redpanda-connect/mcp-servers:getConfigSchema"};
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Get MCP server configuration schema"
+      description: "Returns the configuration schema for MCP server tools, including available components and processors."
+      responses: {
+        key: "200"
+        value: {
+          description: "OK"
+          schema: {json_schema: {ref: ".redpanda.api.dataplane.v1alpha3.GetMCPServerServiceConfigSchemaResponse"}}
+        }
+      }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_MCP_SERVER
+    };
+    option (redpanda.api.common.v1.method_authorization) = {
+      resource_type: "mcpservers"
+      permission: "dataplane_mcpserver_get"
+    };
+  }
+
+  // Lints a MCP tools configuration and returns zero or more
+  // issues ("hints"). An empty list means the config passed all lint checks.
+  rpc LintMCPConfig(LintMCPConfigRequest) returns (LintMCPConfigResponse) {
+    option (google.api.http) = {
+      post: "/v1alpha3/redpanda-connect/mcp-servers:lint-config"
+      body: "*"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Lint a MCP tools configuration"
+      description: "Validates a given MCP tool's configuration and returns linting hints. Each tool's YAML configuration is validated. If no problems are found, the response is empty."
+      responses: {
+        key: "200"
+        value: {
+          description: "Linting finished. See `lint_hints` for details."
+          schema: {json_schema: {ref: ".redpanda.api.dataplane.v1alpha3.LintMCPConfigResponse"}}
+        }
+      }
+    };
+    option (redpanda.api.auth.v1.authorization) = {
+      required_permission: PERMISSION_VIEW
+      api: API_REDPANDA_CONNECT
+    };
+    option (redpanda.api.common.v1.method_authorization) = {
+      resource_type: "mcpservers"
+      permission: "dataplane_mcpserver_get"
+    };
+  }
+}
+
+// MCPServerCreate contains the details for the MCP server creation request.
+message MCPServerCreate {
+  option (google.api.resource) = {
+    type: "redpanda.api.dataplane.v1alpha3/MCPServerCreate"
+    singular: "mcp_server"
+    plural: "mcp_servers"
+  };
+
+  // User-friendly MCP server name.
+  string display_name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9-_ /]+$",
+    (buf.validate.field).string.min_len = 3,
+    (buf.validate.field).string.max_len = 128
+  ];
+
+  // Optional MCP server description.
+  string description = 2 [(buf.validate.field).string.max_len = 256];
+
+  // All the configuration tools for the MCP server.
+  // The key in the map is the tool name.
+  map<string, MCPServer.Tool> tools = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).map.min_pairs = 1,
+    (buf.validate.field).map.keys.string = {
+      pattern: "^[A-Za-z0-9_-]+$"
+      max_len: 64
+    },
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "Map of tool names to their configurations. Each tool defines a capability that the MCP server exposes."}
+  ];
+
+  // The number of resources that are guaranteed to be assigned to the MCP server.
+  redpanda.api.dataplane.v1.Pipeline.Resources resources = 4;
+
+  // Optional list of tags to attach to a MCP server.
+  map<string, string> tags = 5 [(buf.validate.field).map = {
+    max_pairs: 16
+    values: {string: {pattern: "^([\\p{L}\\p{Z}\\p{N}_.:/=+\\-@]*)$"}}
+  }];
+}
+
+// CreateMCPServerRequest is the request of CreateMCPServer.
+message CreateMCPServerRequest {
+  MCPServerCreate mcp_server = 1;
+}
+
+message CreateMCPServerResponse {
+  MCPServer mcp_server = 1;
+}
+
+message GetMCPServerRequest {
+  // MCP server ID.
+  string id = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9-_/]+$"
+  ];
+}
+
+message GetMCPServerResponse {
+  MCPServer mcp_server = 1;
+}
+
+message ListMCPServersRequest {
+  // List filter.
+  Filter filter = 1;
+
+  // Limit the paginated response to a number of items.
+  int32 page_size = 2 [
+    (buf.validate.field).int32 = {
+      gte: -1
+      lte: 50
+    },
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {
+      description: "Limit the paginated response to a number of items. Defaults to 100. Use -1 to disable pagination."
+      minimum: -1
+      maximum: 50
+    }
+  ];
+
+  // Value of the next_page_token field returned by the previous response.
+  // If not provided, the system assumes the first page is requested.
+  string page_token = 3;
+
+  message Filter {
+    // Substring match on MCP server display name. Case-sensitive.
+    string display_name_contains = 1 [
+      (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+      (buf.validate.field).string.pattern = "^[A-Za-z0-9-_ /]+$",
+      (buf.validate.field).string.max_len = 128,
+      (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "Returns MCP servers that partially match this name."}
+    ];
+
+    // Filters MCP servers by tags. All provided tags must exactly match (AND operation).
+    // Only returns MCP servers that have all the specified key-value pairs.
+    map<string, string> tags = 2 [
+      (buf.validate.field).map = {
+        max_pairs: 16
+        values: {string: {pattern: "^([\\p{L}\\p{Z}\\p{N}_.:/=+\\-@]*)$"}}
+      },
+      (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "Filters by tags using exact match. Returns only MCP servers that have all the specified key-value pairs."}
+    ];
+
+    // Filters MCP servers that reference this secret ID in their tool configurations.
+    string secret_id = 3 [
+      (buf.validate.field).ignore = IGNORE_IF_ZERO_VALUE,
+      (buf.validate.field).string.pattern = "^[A-Z][A-Z0-9_]*$"
+    ];
+  }
+}
+
+message ListMCPServersResponse {
+  repeated MCPServer mcp_servers = 1;
+  // Token to retrieve the next page of results. Empty if there are no more results.
+  string next_page_token = 2;
+}
+
+message MCPServerUpdate {
+  option (google.api.resource) = {
+    type: "redpanda.api.dataplane.v1alpha3/MCPServerUpdate"
+    singular: "mcp_server"
+    plural: "mcp_servers"
+  };
+
+  // User-friendly MCP server name.
+  string display_name = 1 [
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9-_ /]+$",
+    (buf.validate.field).string.min_len = 3,
+    (buf.validate.field).string.max_len = 128
+  ];
+
+  // MCP server description.
+  string description = 2 [(buf.validate.field).string.max_len = 256];
+
+  // All the configuration tools for the MCP server.
+  map<string, MCPServer.Tool> tools = 3 [
+    (buf.validate.field).map.keys.string = {
+      pattern: "^[A-Za-z0-9_-]+$"
+      max_len: 64
+    },
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "Map of tool names to their configurations. Each tool defines a capability that the MCP server exposes."}
+  ];
+
+  // The number of resources that are guaranteed to be assigned to the MCP server.
+  redpanda.api.dataplane.v1.Pipeline.Resources resources = 4;
+
+  // A map of tags to add, update or delete.
+  // If a tag's value is empty, the server interprets that as a deletion.
+  map<string, string> tags = 5 [(buf.validate.field).map = {
+    max_pairs: 16
+    values: {string: {pattern: "^([\\p{L}\\p{Z}\\p{N}_.:/=+\\-@]*)$"}}
+  }];
+}
+
+message UpdateMCPServerRequest {
+  // MCP server ID.
+  string id = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9-_/]+$"
+  ];
+
+  MCPServerUpdate mcp_server = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true
+  ];
+
+  // Specifies which fields to update. If not provided, updates all fields.
+  google.protobuf.FieldMask update_mask = 3;
+}
+
+message UpdateMCPServerResponse {
+  MCPServer mcp_server = 1;
+}
+
+message DeleteMCPServerRequest {
+  // MCP server ID.
+  string id = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9-_/]+$"
+  ];
+}
+
+message DeleteMCPServerResponse {}
+
+message StopMCPServerRequest {
+  // MCP server ID.
+  string id = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9-_/]+$"
+  ];
+}
+
+message StopMCPServerResponse {
+  MCPServer mcp_server = 1;
+}
+
+message StartMCPServerRequest {
+  // MCP server ID.
+  string id = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.pattern = "^[A-Za-z0-9-_/]+$"
+  ];
+}
+
+message StartMCPServerResponse {
+  MCPServer mcp_server = 1;
+}
+
+message GetMCPServerServiceConfigSchemaRequest {}
+
+message GetMCPServerServiceConfigSchemaResponse {
+  message ConfigurationYAMLSchema {
+    // The component type of the schema.
+    MCPServer.Tool.ComponentType component_type = 1;
+    // JSON schema of the configuration components that are allowed for MCP servers.
+    string config_schema = 2;
+  }
+  repeated ConfigurationYAMLSchema configuration_yamls = 1 [
+    (buf.validate.field).repeated.min_items = 1,
+    (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_field) = {description: "The configuration schema for the MCP server."}
+  ];
+}
+
+message LintMCPConfigRequest {
+  // Map of tool names to their configurations. Each tool contains YAML configuration.
+  map<string, MCPServer.Tool> tools = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true
+  ];
+}
+
+message LintMCPConfigResponse {
+  // Map of tool names to their linting issues. Empty if no issues are found.
+  map<string, common.v1.LintHint> lint_hints = 1;
+}

@@ -1,0 +1,40 @@
+/**
+ * Copyright 2026 Redpanda Data, Inc.
+ *
+ * Use of this software is governed by the Business Source License
+ * included in the file https://github.com/redpanda-data/redpanda/blob/dev/licenses/bsl.md
+ *
+ * As of the Change Date specified in that file, in accordance with
+ * the Business Source License, use of this software will be governed
+ * by the Apache License, Version 2.0
+ */
+
+import { createFileRoute } from '@tanstack/react-router';
+import { isEmbedded, isFeatureFlagEnabled } from 'config';
+import { lazy } from 'react';
+import { z } from 'zod';
+
+import RpConnectPipelinesCreate from '../../components/pages/rp-connect/pipelines-create';
+
+const PipelinePage = lazy(() => import('../../components/pages/rp-connect/pipeline'));
+
+const searchSchema = z.object({
+  serverless: z.string().optional().catch(undefined),
+});
+
+export const Route = createFileRoute('/rp-connect/create')({
+  staticData: {
+    title: 'Create Pipeline',
+  },
+  validateSearch: searchSchema,
+  component: CreatePipelineRoute,
+});
+
+function CreatePipelineRoute() {
+  // Tier 1: enablePipelineDiagrams → new pipeline page directly
+  // Tier 2: legacy form
+  if (isFeatureFlagEnabled('enablePipelineDiagrams') && isEmbedded()) {
+    return <PipelinePage />;
+  }
+  return <RpConnectPipelinesCreate matchedPath="/rp-connect/create" />;
+}

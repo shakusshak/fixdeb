@@ -1,0 +1,904 @@
+/**
+ * Copyright 2022 Redpanda Data, Inc.
+ *
+ * Use of this software is governed by the Business Source License
+ * included in the file https://github.com/redpanda-data/redpanda/blob/dev/licenses/bsl.md
+ *
+ * As of the Change Date specified in that file, in accordance with
+ * the Business Source License, use of this software will be governed
+ * by the Apache License, Version 2.0
+ */
+/** biome-ignore-all lint/correctness/useUniqueElementIds: legacy, needs refactor */
+
+import {
+  Box,
+  Button,
+  createStandaloneToast,
+  Flex,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalFooter,
+  ModalHeader,
+  ModalOverlay,
+  redpandaTheme,
+  redpandaToastOptions,
+  Step,
+  StepIcon,
+  StepIndicator,
+  StepNumber,
+  Stepper,
+  StepSeparator,
+  StepStatus,
+} from '@redpanda-data/ui';
+import { AlertIcon, ChevronLeftIcon, ChevronRightIcon } from 'components/icons';
+import { motion } from 'motion/react';
+
+import { ActiveReassignments } from './components/active-reassignments';
+import { type ApiData, computeReassignments, type TopicPartitions } from './logic/reassign-logic';
+import { ReassignmentTracker } from './logic/reassignment-tracker';
+import {
+  computeMovedReplicas,
+  partitionSelectionToTopicPartitions,
+  topicAssignmentsToReassignmentRequest,
+} from './logic/utils';
+import { StepSelectPartitions } from './step1-partitions';
+import { StepSelectBrokers } from './step2-brokers';
+import { StepReview, type TopicWithMoves } from './step3-review';
+import { appGlobal } from '../../../state/app-global';
+import { api, partialTopicConfigs } from '../../../state/backend-api';
+import type {
+  AlterPartitionReassignmentsPartitionResponse,
+  Broker,
+  Partition,
+  PartitionReassignmentRequest,
+  Topic,
+} from '../../../state/rest-interfaces';
+import { uiSettings } from '../../../state/ui';
+import { animProps } from '../../../utils/animation-props';
+import { IsDev } from '../../../utils/env';
+import { clone, toJson } from '../../../utils/json-utils';
+import { DefaultSkeleton } from '../../../utils/tsx-utils';
+import { scrollTo, scrollToTop } from '../../../utils/utils';
+import { FeatureLicenseNotification } from '../../license/feature-license-notification';
+import { showErrorModal } from '../../misc/error-modal';
+import { NullFallbackBoundary } from '../../misc/null-fallback-boundary';
+import PageContent from '../../misc/page-content';
+import Section from '../../misc/section';
+import { Statistic } from '../../misc/statistic';
+import { PageComponent, type PageInitHelper } from '../page';
+
+export type PartitionSelection = {
+  // Which partitions are selected?
+  [topicName: string]: number[]; // topicName -> array of partitionIds
+};
+
+const reassignmentTracker = new ReassignmentTracker();
+export { reassignmentTracker };
+
+// TODO - once ReassignPartitions is migrated to FC, we could should move this code to use useToast()
+const { ToastContainer, toast } = createStandaloneToast({
+  theme: redpandaTheme,
+  defaultOptions: {
+    ...redpandaToastOptions.defaultOptions,
+    isClosable: true,
+    duration: 2000,
+  },
+});
+
+type ReassignPartitionsState = {
+  removeThrottleFromTopicsContent: string[] | null;
+  currentStep: number;
+  partitionSelection: PartitionSelection;
+  selectedBrokerIds: number[];
+  reassignmentRequest: PartitionReassignmentRequest | null;
+  topicsWithThrottle: string[];
+  requestInProgress: boolean;
+};
+
+class ReassignPartitions extends PageComponent {
+  refreshTopicConfigsTimer: number | null = null;
+  refreshTopicConfigsRequestsInProgress = 0;
+
+  state: ReassignPartitionsState = {
+    removeThrottleFromTopicsContent: null,
+    currentStep: 0,
+    partitionSelection: {},
+    selectedBrokerIds: [],
+    reassignmentRequest: null,
+    topicsWithThrottle: [],
+    requestInProgress: false,
+  };
+
+  // Getter wrappers so the steps[] isEnabled functions can read rp.partitionSelection etc.
+  get partitionSelection() {
+    return this.state.partitionSelection;
+  }
+  get selectedBrokerIds() {
+    return this.state.selectedBrokerIds;
+  }
+
+  constructor(p: Readonly<{ matchedPath: string }>) {
+    super(p);
+  }
+
+  initPage(p: PageInitHelper): void {
+    p.title = 'Reassign Partitions';
+    p.addBreadcrumb('Reassign Partitions', '/reassign-partitions');
+
+    appGlobal.onRefresh = () => this.refreshData(true);
+    this.refreshData(true);
+  }
+
+  componentDidMount() {
+    super.componentDidMount();
+    this.removeThrottleFromTopics = this.removeThrottleFromTopics.bind(this);
+    this.onNextPage = this.onNextPage.bind(this);
+    this.onPreviousPage = this.onPreviousPage.bind(this);
+    this.startRefreshingTopicConfigs = this.startRefreshingTopicConfigs.bind(this);
+    this.stopRefreshingTopicConfigs = this.stopRefreshingTopicConfigs.bind(this);
+    this.refreshTopicConfigs = this.refreshTopicConfigs.bind(this);
+    // biome-ignore lint/suspicious/noConsole: existing console error logging
+    this.refreshTopicConfigs().catch(console.error);
+    this.startRefreshingTopicConfigs();
+
+    reassignmentTracker.start();
+  }
+
+  componentDidUpdate(_prevProps: Readonly<{ matchedPath: string }>, prevState: Readonly<ReassignPartitionsState>) {
+    // Auto-scroll when navigating to a non-first step
+    if (prevState.currentStep !== this.state.currentStep && this.state.currentStep !== 0) {
+      setTimeout(() => scrollTo('wizard', 'start', -20), 20);
+    }
+
+    // Reset selection if brokers or partitions become unavailable
+    if (
+      prevState.selectedBrokerIds !== this.state.selectedBrokerIds ||
+      prevState.partitionSelection !== this.state.partitionSelection
+    ) {
+      const { selectedBrokerIds, partitionSelection } = this.state;
+
+      if (selectedBrokerIds.length === 0) {
+        const selectedTopicPartitions = Object.values(partitionSelection);
+        if (selectedTopicPartitions.length === 0 || selectedTopicPartitions.all((x) => x.length === 0)) {
+          return; // nothing selected so far
+        }
+      }
+
+      let reset = false;
+
+      // has user selected a broker that is not available anymore?
+      if (selectedBrokerIds.any((x) => api.clusterInfo?.brokers.find((b) => b.brokerId === x) === undefined)) {
+        reset = true;
+      }
+
+      // has user selected a topic partition that is not available anymore?
+      if (reset === false && this.selectedTopicPartitions === null) {
+        reset = true;
+      }
+
+      if (reset) {
+        this.resetSelectionAndPage(true, true);
+      }
+    }
+  }
+
+  refreshData(force: boolean) {
+    api.refreshCluster(force); // need to know brokers for reassignment calculation, will also refresh config
+    api.refreshTopics(force);
+    api.refreshPartitions('all', force);
+    api.refreshPartitionReassignments(force);
+  }
+
+  componentWillUnmount() {
+    super.componentWillUnmount();
+    reassignmentTracker.stop();
+    this.stopRefreshingTopicConfigs();
+  }
+
+  render() {
+    if (!api.clusterInfo) {
+      return DefaultSkeleton;
+    }
+    if (!api.topics) {
+      return DefaultSkeleton;
+    }
+
+    if (api.partitionReassignments === undefined) {
+      return DefaultSkeleton;
+    }
+
+    const partitionCountLeaders = api.topics?.sum((t) => t.partitionCount);
+    const partitionCountOnlyReplicated = api.topics?.sum((t) => t.partitionCount * (t.replicationFactor - 1));
+
+    const { currentStep, requestInProgress, partitionSelection, selectedBrokerIds, reassignmentRequest } = this.state;
+
+    const step = steps[currentStep];
+    const nextButtonCheck = step.nextButton.isEnabled(this);
+    const nextButtonEnabled = nextButtonCheck === true;
+    const nextButtonHelp = typeof nextButtonCheck === 'string' ? (nextButtonCheck as string) : null;
+
+    return (
+      <>
+        <ToastContainer />
+        <div className="reassignPartitions" style={{ paddingBottom: '12em' }}>
+          <PageContent>
+            <NullFallbackBoundary>
+              <FeatureLicenseNotification featureName="reassignPartitions" />
+            </NullFallbackBoundary>
+
+            {/* Statistics */}
+            <Section py={4}>
+              <Flex>
+                <Statistic title="Broker Count" value={api.clusterInfo?.brokers.length} />
+                <Statistic title="Leader Partitions" value={partitionCountLeaders ?? '...'} />
+                <Statistic title="Replica Partitions" value={partitionCountOnlyReplicated ?? '...'} />
+                <Statistic
+                  title="Total Partitions"
+                  value={
+                    partitionCountLeaders !== null && partitionCountOnlyReplicated !== null
+                      ? partitionCountLeaders + partitionCountOnlyReplicated
+                      : '...'
+                  }
+                />
+              </Flex>
+            </Section>
+
+            {/* Active Reassignments */}
+            <Section id="activeReassignments">
+              <ActiveReassignments
+                onRemoveThrottleFromTopics={this.removeThrottleFromTopics}
+                throttledTopics={this.state.topicsWithThrottle}
+              />
+            </Section>
+
+            {/* Content */}
+            <Section id="wizard">
+              {/* Steps */}
+              <div style={{ margin: '.75em 1em 1em 1em' }}>
+                <Stepper colorScheme="brand" index={currentStep}>
+                  {steps.map((item) => (
+                    <Step key={item.title} title={item.title}>
+                      <StepIndicator>
+                        <StepStatus active={<StepNumber />} complete={<StepIcon />} incomplete={<StepNumber />} />
+                      </StepIndicator>
+                      <Box>{item.title}</Box>
+                      <StepSeparator />
+                    </Step>
+                  ))}
+                </Stepper>
+              </div>
+
+              {/* Content */}
+              <motion.div {...animProps} key={`step${currentStep}`}>
+                {' '}
+                {(() => {
+                  switch (currentStep) {
+                    case 0:
+                      return (
+                        <StepSelectPartitions
+                          onPartitionSelectionChange={(newSelection) =>
+                            this.setState({ partitionSelection: newSelection })
+                          }
+                          partitionSelection={partitionSelection}
+                          throttledTopics={this.state.topicsWithThrottle}
+                        />
+                      );
+                    case 1:
+                      return (
+                        <StepSelectBrokers
+                          onSelectionChange={(newIds) => this.setState({ selectedBrokerIds: newIds })}
+                          partitionSelection={partitionSelection}
+                          selectedBrokerIds={selectedBrokerIds}
+                        />
+                      );
+                    case 2:
+                      return (
+                        <StepReview
+                          // biome-ignore lint/style/noNonNullAssertion: not touching MobX observables
+                          assignments={reassignmentRequest!}
+                          partitionSelection={partitionSelection}
+                          reassignPartitions={this}
+                          topicsWithMoves={this.topicsWithMoves}
+                        />
+                      );
+                    default:
+                      return null;
+                  }
+                })()}
+              </motion.div>
+
+              {/* Navigation */}
+              <div
+                style={{
+                  margin: '2.5em 0 1.5em',
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  height: '2.5em',
+                }}
+              >
+                {/* Back */}
+                {Boolean(step.backButton) && (
+                  <Button
+                    isDisabled={currentStep <= 0 || requestInProgress}
+                    onClick={this.onPreviousPage}
+                    style={{ minWidth: '14em' }}
+                  >
+                    <span>
+                      <ChevronLeftIcon />
+                    </span>
+                    <span>{step.backButton}</span>
+                  </Button>
+                )}
+
+                {/* Next */}
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '2em' }}>
+                  <div>{nextButtonHelp}</div>
+                  <Button
+                    isDisabled={!nextButtonEnabled || requestInProgress}
+                    onClick={this.onNextPage}
+                    style={{ minWidth: '14em', marginLeft: 'auto' }}
+                    variant="solid"
+                  >
+                    <span>{step.nextButton.text}</span>
+                    <span>
+                      <ChevronRightIcon />
+                    </span>
+                  </Button>
+                </div>
+              </div>
+            </Section>
+          </PageContent>
+          <Modal
+            isOpen={this.state.removeThrottleFromTopicsContent !== null}
+            onClose={() => {
+              this.setState({ removeThrottleFromTopicsContent: null });
+            }}
+          >
+            <ModalOverlay />
+            <ModalContent minW="5xl">
+              <ModalHeader>
+                <Flex alignItems="center" gap={2}>
+                  <AlertIcon size={18} />
+                  Remove throttle config from topics
+                </Flex>
+              </ModalHeader>
+              <ModalBody>
+                <div>
+                  <div>
+                    There are {this.state.topicsWithThrottle.length} topics with throttling applied to their replicas.
+                    <br />
+                    Kowl implements throttling of reassignments by setting{' '}
+                    <span className="tooltip" style={{ textDecoration: 'dotted underline' }}>
+                      two configuration values
+                      <span className="tooltiptext" style={{ textAlign: 'left', width: '500px' }}>
+                        Kowl sets those two configuration entries when throttling a topic reassignment:
+                        <div style={{ marginTop: '.5em' }}>
+                          <code>leader.replication.throttled.replicas</code>
+                          <br />
+                          <code>follower.replication.throttled.replicas</code>
+                        </div>
+                      </span>
+                    </span>{' '}
+                    in a topics configuration.
+                    <br />
+                    So if you previously used Kowl to reassign any of the partitions of the following topics, the
+                    throttling config might still be active.
+                  </div>
+                  <div style={{ margin: '1em 0' }}>
+                    <h4>Throttled Topics</h4>
+                    <ul style={{ maxHeight: '145px', overflowY: 'auto' }}>
+                      {this.state.removeThrottleFromTopicsContent?.map((t) => (
+                        <li key={t}>{t}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>Do you want to remove the throttle config from those topics?</div>
+                </div>
+              </ModalBody>
+              <ModalFooter gap={2}>
+                <Button
+                  onClick={() => {
+                    this.setState({ removeThrottleFromTopicsContent: null });
+                  }}
+                  variant="ghost"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  colorScheme="red"
+                  onClick={async () => {
+                    if (this.state.removeThrottleFromTopicsContent === null) {
+                      return;
+                    }
+                    const baseText = 'Removing throttle config from topics';
+
+                    const toastId = toast({
+                      status: 'loading',
+                      description: `${baseText}...`,
+                      duration: null,
+                    });
+
+                    const result = await api.resetThrottledReplicas(this.state.removeThrottleFromTopicsContent);
+                    const errors = result.patchedConfigs.filter((r) => r.error);
+
+                    if (errors.length === 0) {
+                      toast.update(toastId, {
+                        status: 'success',
+                        description: `${baseText} - Done`,
+                        duration: 2500,
+                      });
+                    } else {
+                      toast.update(toastId, {
+                        status: 'error',
+                        description: `${baseText}: ${errors.length} errors`,
+                        duration: 2500,
+                      });
+                    }
+
+                    await this.refreshTopicConfigs();
+                  }}
+                >
+                  Remove throttle
+                </Button>
+              </ModalFooter>
+            </ModalContent>
+          </Modal>
+        </div>
+      </>
+    );
+  }
+
+  resetSelectionAndPage(scrollTop: boolean, showSelectionWarning: boolean) {
+    this.refreshData(true);
+    this.setState({
+      partitionSelection: {},
+      selectedBrokerIds: [],
+      reassignmentRequest: null,
+    });
+
+    if (showSelectionWarning) {
+      toast({
+        status: 'warning',
+        title: 'Selection has been reset',
+        description:
+          'Your selection contained brokers or partitions that are not available anymore after the refresh. \n' +
+          'Your selection has been reset.',
+      });
+    }
+
+    if (scrollTop) {
+      setTimeout(() => {
+        this.setState({ currentStep: 0 });
+        setTimeout(() => scrollToTop());
+      }, 300);
+    }
+  }
+
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: legacy code
+  onNextPage() {
+    if (this.state.currentStep === 0) {
+      // Select -> Assign
+    }
+
+    if (this.state.currentStep === 1) {
+      // Assign -> Review
+      const topicPartitions = this.selectedTopicPartitions;
+      if (topicPartitions === null || topicPartitions === undefined) {
+        this.resetSelectionAndPage(true, true);
+        return;
+      }
+
+      const targetBrokers = this.state.selectedBrokerIds
+        .map((id) => api.clusterInfo?.brokers.first((b) => b.brokerId === id))
+        .filterFalsy();
+      if (targetBrokers.any((b) => b === null)) {
+        throw new Error('one or more broker ids could not be mapped to broker entries');
+      }
+
+      const apiTopicPartitions = new Map<string, Partition[]>();
+      for (const [topicName, partitions] of api.topicPartitions) {
+        if (!partitions) {
+          continue;
+        }
+        const validOnly = partitions.filter((x) => !x.hasErrors);
+        apiTopicPartitions.set(topicName, validOnly);
+      }
+
+      // error checking will happen inside computeReassignments
+      const apiData: ApiData = {
+        brokers: api.clusterInfo?.brokers ?? [],
+        topics: api.topics as Topic[],
+        topicPartitions: apiTopicPartitions,
+      };
+
+      const topicAssignments = computeReassignments(apiData, topicPartitions, targetBrokers);
+
+      this.setState({ reassignmentRequest: topicAssignmentsToReassignmentRequest(topicAssignments) });
+    }
+
+    if (this.state.currentStep === 2) {
+      // Review -> Start
+      const request = this.state.reassignmentRequest;
+      if (request === null) {
+        toast({
+          status: 'error',
+          description: 'reassignment request was null',
+          duration: 3000,
+        });
+        return;
+      }
+
+      setTimeout(async () => {
+        try {
+          this.setState({ requestInProgress: true });
+          // todo: Don't use returns and execeptions for control flow
+          const success = await this.startReassignment(request);
+          if (success) {
+            // Reset settings, go back to first page
+            this.resetSelectionAndPage(true, false);
+          }
+        } catch (_err) {
+          toast({
+            status: 'error',
+            description: 'Error starting partition reassignment.\nSee console for more information.',
+            duration: 3000,
+          });
+        } finally {
+          this.setState({ requestInProgress: false });
+        }
+      });
+
+      return;
+    }
+
+    this.setState({ currentStep: this.state.currentStep + 1 });
+  }
+
+  onPreviousPage() {
+    this.setState({ currentStep: this.state.currentStep - 1 });
+  }
+
+  async startReassignment(request: PartitionReassignmentRequest): Promise<boolean> {
+    if (uiSettings.reassignment.maxReplicationTraffic !== null && uiSettings.reassignment.maxReplicationTraffic > 0) {
+      const success = await this.setTrafficLimit(request);
+      if (!success) {
+        return false;
+      }
+    }
+
+    const toastRef = toast({
+      status: 'loading',
+      description: 'Starting reassignment',
+      duration: null,
+    });
+    try {
+      const response = await api.startPartitionReassignment(request);
+
+      const errors = response.reassignPartitionsResponses
+        .map((e) => {
+          const partErrors = e.partitions.filter((p) => p.errorMessage !== null);
+          if (partErrors.length === 0) {
+            return null;
+          }
+          return { topicName: e.topicName, partitions: partErrors };
+        })
+        .filterNull();
+      const startedCount = response.reassignPartitionsResponses.sum((x) => x.partitions.count((p) => !p.errorCode));
+
+      if (errors.length === 0) {
+        // No errors
+        toast.update(toastRef, {
+          status: 'success',
+          description: 'Reassignment successful',
+          duration: 2500,
+        });
+        return true;
+      }
+      if (startedCount > 0) {
+        // Some errors
+        toast.update(toastRef, {
+          status: 'success',
+          description: 'Reassignment successful',
+          duration: 2500,
+        });
+        this.setReassignError(startedCount, errors);
+        return true;
+      }
+      // All errors
+      toast.update(toastRef, {
+        status: 'error',
+        duration: 2500,
+      });
+      this.setReassignError(startedCount, errors);
+      return false;
+    } catch (_err) {
+      toast.close(toastRef);
+
+      return false;
+    }
+  }
+
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: legacy code
+  async setTrafficLimit(request: PartitionReassignmentRequest): Promise<boolean> {
+    const maxBytesPerSecond = Math.round(uiSettings.reassignment.maxReplicationTraffic ?? 0);
+
+    const topicReplicas: {
+      topicName: string;
+      leaderReplicas: { brokerId: number; partitionId: number }[];
+      followerReplicas: { brokerId: number; partitionId: number }[];
+    }[] = [];
+
+    for (const t of request.topics) {
+      const leaderReplicas: { partitionId: number; brokerId: number }[] = [];
+      const followerReplicas: { partitionId: number; brokerId: number }[] = [];
+      for (const p of t.partitions) {
+        const partitionId = p.partitionId;
+        const brokersOld = api.topicPartitions
+          ?.get(t.topicName)
+          ?.first((partition) => partition.id === partitionId)?.replicas;
+        const brokersNew = p.replicas;
+
+        if (brokersOld === null || brokersOld === undefined || brokersNew === null) {
+          continue;
+        }
+
+        // leader throttling is applied to all sources (all brokers that have a replica of this partition)
+        for (const sourceBroker of brokersOld) {
+          leaderReplicas.push({ partitionId, brokerId: sourceBroker });
+        }
+
+        // follower throttling is applied only to target brokers that do not yet have a copy
+        const newBrokers = brokersNew.except(brokersOld);
+        for (const targetBroker of newBrokers) {
+          followerReplicas.push({ partitionId, brokerId: targetBroker });
+        }
+      }
+
+      topicReplicas.push({
+        topicName: t.topicName,
+        leaderReplicas,
+        followerReplicas,
+      });
+    }
+
+    const toastRef = toast({
+      status: 'loading',
+      description: 'Setting bandwidth throttle... 1/2',
+      duration: null,
+    });
+    try {
+      const brokerIds = api.clusterInfo?.brokers.map((b) => b.brokerId) ?? [];
+      let response = await api.setReplicationThrottleRate(brokerIds, maxBytesPerSecond);
+      let errors = response.patchedConfigs.filter((c) => c.error);
+      if (errors.length > 0) {
+        throw new Error(toJson(errors));
+      }
+
+      toast.update(toastRef, {
+        description: 'Setting bandwidth throttle... 2/2',
+        duration: 2500,
+      });
+
+      response = await api.setThrottledReplicas(topicReplicas);
+      errors = response.patchedConfigs.filter((c) => c.error);
+      if (errors.length > 0) {
+        throw new Error(toJson(errors));
+      }
+
+      toast.update(toastRef, {
+        status: 'success',
+        description: 'Setting bandwidth throttle... done',
+        duration: 2500,
+      });
+      return true;
+    } catch (_err) {
+      toast.close(toastRef);
+      return false;
+    }
+  }
+
+  setReassignError(
+    startedCount: number,
+    errors: {
+      topicName: string;
+      partitions: AlterPartitionReassignmentsPartitionResponse[];
+    }[]
+  ) {
+    showErrorModal(
+      'Reassign Partitions',
+      `Reassignment request returned errors for ${errors.sum((e) => e.partitions.length)} / ${startedCount} partitions.`,
+      <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+        {errors.map((r) => (
+          <div key={r.topicName}>
+            <div>
+              <h4>Topic: "{r.topicName}"</h4>
+              <ul>
+                {r.partitions.map((p) => (
+                  <li key={p.partitionId}>
+                    PartitionID {p.partitionId}: {p.errorMessage}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  startRefreshingTopicConfigs() {
+    if (IsDev && this.refreshTopicConfigsTimer === null) {
+      this.refreshTopicConfigsTimer = window.setInterval(this.refreshTopicConfigs, 6000);
+    }
+  }
+  stopRefreshingTopicConfigs() {
+    if (IsDev && this.refreshTopicConfigsTimer) {
+      window.clearInterval(this.refreshTopicConfigsTimer);
+      this.refreshTopicConfigsTimer = null;
+    }
+  }
+
+  async refreshTopicConfigs() {
+    try {
+      if (this.refreshTopicConfigsRequestsInProgress > 0) {
+        return;
+      }
+      this.refreshTopicConfigsRequestsInProgress += 1;
+      const topicConfigs = await partialTopicConfigs([
+        'follower.replication.throttled.replicas',
+        'leader.replication.throttled.replicas',
+      ]);
+
+      // Only get the names of the topics that have throttles applied
+      const newThrottledTopics = topicConfigs.topicDescriptions
+        .filter((t) => t.configEntries.any((x) => Boolean(x.value)))
+        .map((t) => t.topicName)
+        .sort();
+
+      // Filter topics that are still being reassigned
+      const inProgress = this.topicPartitionsInProgress;
+      const filteredTopics = newThrottledTopics.filter((t) => !inProgress.includes(t));
+
+      this.setState({ topicsWithThrottle: filteredTopics });
+    } catch (_err) {
+      this.stopRefreshingTopicConfigs();
+    } finally {
+      this.refreshTopicConfigsRequestsInProgress -= 1;
+    }
+  }
+
+  removeThrottleFromTopics() {
+    this.setState({ removeThrottleFromTopicsContent: clone(this.state.topicsWithThrottle) });
+  }
+
+  get selectedTopicPartitions(): TopicPartitions[] | undefined {
+    const apiTopics = api.topics;
+    const apiPartitions = api.topicPartitions;
+
+    if (!(apiTopics && apiPartitions)) {
+      // biome-ignore lint/suspicious/useGetterReturn: early return for undefined case
+      return;
+    }
+
+    return partitionSelectionToTopicPartitions(this.state.partitionSelection, apiPartitions, apiTopics);
+  }
+
+  get maximumSelectedReplicationFactor(): number {
+    let maxRf = 0;
+    for (const topicName in this.state.partitionSelection) {
+      if (Object.hasOwn(this.state.partitionSelection, topicName)) {
+        const topic = api.topics?.first((x) => x.topicName === topicName);
+        if (topic && topic.replicationFactor > maxRf) {
+          maxRf = topic.replicationFactor;
+        }
+      }
+    }
+    return maxRf;
+  }
+
+  get topicsWithMoves(): TopicWithMoves[] {
+    if (this.state.reassignmentRequest === null) {
+      return [];
+    }
+    if (api.topics === null) {
+      return [];
+    }
+    return computeMovedReplicas(
+      this.state.partitionSelection,
+      this.state.reassignmentRequest,
+      api.topics,
+      api.topicPartitions
+    );
+  }
+
+  get topicPartitionsInProgress(): string[] {
+    return api.partitionReassignments?.map((r) => r.topicName) ?? [];
+  }
+}
+export default ReassignPartitions;
+
+type WizardStep = {
+  step: number;
+  title: string;
+  backButton?: string;
+  nextButton: {
+    text: string;
+    isEnabled: (rp: ReassignPartitions) => boolean | string;
+    computeWarning?: (rp: ReassignPartitions) => string | undefined;
+  };
+};
+const steps: WizardStep[] = [
+  {
+    step: 0,
+    title: 'Select Partitions',
+    nextButton: {
+      text: 'Select Target Brokers',
+      // Can only continue if at least one partition was selected
+      isEnabled: (rp) => Object.keys(rp.partitionSelection).length > 0,
+    },
+  },
+  {
+    step: 1,
+    title: 'Assign to Brokers',
+    backButton: 'Select Partitions',
+    nextButton: {
+      text: 'Review Plan',
+      // Can only continue if enough brokers are selected,
+      // so all replicas of each partitions can be put on a different broker.
+      isEnabled: (rp) => {
+        const maxRf = rp.maximumSelectedReplicationFactor;
+
+        if (rp.selectedBrokerIds.length < maxRf) {
+          return `Select at least ${maxRf} brokers`;
+        }
+
+        return true;
+      },
+      computeWarning: (rp): string | undefined => {
+        const allBrokers = api.clusterInfo?.brokers;
+        if (!allBrokers) {
+          return;
+        }
+
+        // Show a warning if the user has selected brokers that are all in the same rack, but
+        // could theoretically select brokers that are in different racks.
+        const allRacks = allBrokers.map((x) => x.rack ?? '').distinct();
+        if (!allRacks) {
+          return; // can't happen since no brokers == can't reach this page anyway
+        }
+        if (allRacks.length <= 1) {
+          return; // Ok, all available brokers are on the same rack
+        }
+
+        // At least 2 racks available
+        const selectedBrokers = rp.selectedBrokerIds
+          .map((id) => allBrokers.first((x) => x.brokerId === id)) // map ID to Broker
+          .filter(Boolean) as Broker[]; // filter missing entries
+        const selectedRacks = selectedBrokers.map((x) => x.rack ?? '').distinct();
+
+        if (selectedRacks.length === 1 && allRacks.length >= 2) {
+          let selectedRack = selectedRacks[0];
+          if (!selectedRack || selectedRack.length === 0) {
+            selectedRack = '(empty)';
+          }
+          // @ts-expect-error perhaps this is needed later on?
+          const _msgStart =
+            selectedBrokers.length === 1
+              ? `Your selected Brokers, Your cluster contains ${allBrokers.length} brokers across `
+              : '';
+        }
+        return;
+      },
+    },
+  },
+  {
+    step: 2,
+    title: 'Review and Confirm',
+    backButton: 'Select Target Brokers',
+    nextButton: {
+      text: 'Start Reassignment',
+      isEnabled: () => true,
+    },
+  },
+];

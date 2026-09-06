@@ -1,0 +1,20 @@
+version: v2
+clean: true
+inputs:
+  - directory: proto
+  - module: buf.build/redpandadata/cloud:4d513424c2de4ca4b584eba3f1dce48d
+    paths:
+      - redpanda/api/adp
+    exclude_paths:
+      - redpanda/api/adp/v1alpha1/agent.proto
+plugins:
+  - remote: buf.build/bufbuild/es:v2.2.5
+    out: frontend/src/protogen
+    opt: target=ts
+    include_imports: true
+  - remote: buf.build/connectrpc/query-es:v2.0.1
+    out: frontend/src/protogen
+    opt:
+      - target=ts
+      - js_import_style=legacy_commonjs
+    include_imports: true

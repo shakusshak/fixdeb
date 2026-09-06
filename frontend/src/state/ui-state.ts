@@ -1,0 +1,288 @@
+/**
+ * Copyright 2022 Redpanda Data, Inc.
+ *
+ * Use of this software is governed by the Business Source License
+ * included in the file https://github.com/redpanda-data/redpanda/blob/dev/licenses/bsl.md
+ *
+ * As of the Change Date specified in that file, in accordance with
+ * the Business Source License, use of this software will be governed
+ * by the Apache License, Version 2.0
+ */
+
+import type React from 'react';
+import { create } from 'zustand';
+
+import { api } from './backend-api';
+import { createTopicDetailsSettings, type TopicDetailsSettings as TopicSettings, useUISettingsStore } from './ui';
+import { boundedAppend } from '../utils/bounded-array';
+
+/**
+ * Cap on retained per-topic settings. The array grows by one entry per distinct topic ever
+ * visited and is persisted (as a full blob) by the settings store, so a session that browses
+ * many topics would grow heap and storage without bound. Oldest-added entries drop first (FIFO;
+ * re-visits don't refresh position). The persisted zustand store has its own cap in
+ * stores/topic-settings-store.ts.
+ */
+const MAX_PER_TOPIC_SETTINGS = 200;
+
+export type BreadcrumbOptions = {
+  canBeTruncated?: boolean;
+  canBeCopied?: boolean;
+};
+
+export type BreadcrumbEntry = {
+  title: string;
+  titleNode?: React.ReactNode;
+  heading?: string;
+  linkTo: string;
+  options?: BreadcrumbOptions;
+};
+
+export type ServerVersionInfo = {
+  ts?: string; // build timestamp, unix seconds
+  sha?: string;
+  branch?: string;
+  shaBusiness?: string;
+  branchBusiness?: string;
+};
+
+export type BackLink = {
+  title: string;
+  linkTo: string;
+};
+
+type UIStateStore = {
+  // Core state
+  _pageTitle: string | React.ReactElement;
+  pageBreadcrumbs: BreadcrumbEntry[];
+  backLink: BackLink | null;
+  shouldHidePageHeader: boolean;
+  pathName: string;
+  _currentTopicName: string | undefined;
+  loginError: string | null;
+  isUsingDebugUserLogin: boolean;
+  serverBuildTimestamp: number | undefined;
+
+  // Computed getters (accessed as properties on the store)
+  get pageTitle(): string | React.ReactElement;
+  get selectedClusterName(): string | null;
+  get currentTopicName(): string | undefined;
+  get topicSettings(): TopicSettings;
+
+  // Actions (setters)
+  setPageTitle: (title: string | React.ReactElement) => void;
+  setPageBreadcrumbs: (breadcrumbs: BreadcrumbEntry[]) => void;
+  setPageState: (
+    title: string | React.ReactElement,
+    breadcrumbs: BreadcrumbEntry[],
+    backLink?: BackLink | null
+  ) => void;
+  setBackLink: (backLink: BackLink | null) => void;
+  setShouldHidePageHeader: (hide: boolean) => void;
+  setPathName: (path: string) => void;
+  setCurrentTopicName: (topicName: string | undefined) => void;
+  setLoginError: (error: string | null) => void;
+  setIsUsingDebugUserLogin: (isUsing: boolean) => void;
+  setServerBuildTimestamp: (timestamp: number | undefined) => void;
+};
+
+export const useUIStateStore = create<UIStateStore>((set, get) => ({
+  // Initial state
+  _pageTitle: ' ',
+  pageBreadcrumbs: [],
+  backLink: null,
+  shouldHidePageHeader: false,
+  pathName: '',
+  _currentTopicName: undefined,
+  loginError: null,
+  isUsingDebugUserLogin: false,
+  serverBuildTimestamp: undefined,
+
+  // Computed getters
+  get pageTitle() {
+    return get()._pageTitle;
+  },
+
+  get selectedClusterName() {
+    try {
+      const uiSettings = useUISettingsStore.getState();
+      if (uiSettings.selectedClusterIndex in api.clusters) {
+        return api.clusters[uiSettings.selectedClusterIndex];
+      }
+      return null;
+    } catch {
+      // In test environments, useUISettingsStore might not be properly initialized
+      return null;
+    }
+  },
+
+  get currentTopicName() {
+    return get()._currentTopicName;
+  },
+
+  get topicSettings() {
+    try {
+      const n = get()._currentTopicName;
+      if (!n) {
+        return createTopicDetailsSettings('');
+      }
+
+      const uiSettings = useUISettingsStore.getState();
+      const topicSettings = uiSettings.perTopicSettings.find((t) => t.topicName === n);
+      if (topicSettings) {
+        return topicSettings;
+      }
+
+      throw new Error('reaction for "currentTopicName" was supposed to create topicDetail settings container');
+    } catch (error) {
+      // In test environments, stores might not be properly initialized
+      // Return a minimal default to avoid breaking tests
+      return createTopicDetailsSettings('');
+    }
+  },
+
+  // Actions
+  setPageTitle: (title: string | React.ReactElement) => {
+    set({ _pageTitle: title });
+    if (typeof title === 'string') {
+      document.title = `${title} - Redpanda Console`;
+    } else {
+      document.title = 'Redpanda Console';
+    }
+  },
+
+  setPageBreadcrumbs: (breadcrumbs: BreadcrumbEntry[]) => {
+    set({ pageBreadcrumbs: breadcrumbs });
+  },
+
+  setPageState: (title: string | React.ReactElement, breadcrumbs: BreadcrumbEntry[], backLink?: BackLink | null) => {
+    if (typeof title === 'string') {
+      document.title = `${title} - Redpanda Console`;
+    } else {
+      document.title = 'Redpanda Console';
+    }
+    set({ _pageTitle: title, pageBreadcrumbs: breadcrumbs, backLink: backLink ?? null });
+  },
+
+  setBackLink: (backLink: BackLink | null) => {
+    set({ backLink });
+  },
+
+  setShouldHidePageHeader: (hide: boolean) => {
+    set({ shouldHidePageHeader: hide });
+  },
+
+  setPathName: (path: string) => {
+    set({ pathName: path });
+  },
+
+  setCurrentTopicName: (topicName: string | undefined) => {
+    set({ _currentTopicName: topicName });
+
+    // Side effect: create topic settings if needed
+    if (topicName) {
+      const uiSettings = useUISettingsStore.getState();
+      if (!uiSettings.perTopicSettings.find((s) => s.topicName === topicName)) {
+        const topicSettings = createTopicDetailsSettings(topicName);
+        useUISettingsStore.getState().updateSettings({
+          perTopicSettings: boundedAppend(uiSettings.perTopicSettings, topicSettings, MAX_PER_TOPIC_SETTINGS),
+        });
+      }
+    }
+  },
+
+  setLoginError: (error: string | null) => {
+    set({ loginError: error });
+  },
+
+  setIsUsingDebugUserLogin: (isUsing: boolean) => {
+    set({ isUsingDebugUserLogin: isUsing });
+  },
+
+  setServerBuildTimestamp: (timestamp: number | undefined) => {
+    set({ serverBuildTimestamp: timestamp });
+  },
+}));
+
+// Legacy export with Proxy for backward compatibility
+// This allows existing code to access and set properties directly like: uiState.loginError = null
+export const uiState = new Proxy(
+  {} as {
+    pageTitle: string | React.ReactElement;
+    pageBreadcrumbs: BreadcrumbEntry[];
+    backLink: BackLink | null;
+    shouldHidePageHeader: boolean;
+    selectedClusterName: string | null;
+    pathName: string;
+    currentTopicName: string | undefined;
+    topicSettings: TopicSettings;
+    loginError: string | null;
+    isUsingDebugUserLogin: boolean;
+    serverBuildTimestamp: number | undefined;
+  },
+  {
+    get(_target, prop: string) {
+      const store = useUIStateStore.getState();
+
+      // Handle computed properties
+      if (prop === 'pageTitle') return store.pageTitle;
+      if (prop === 'selectedClusterName') return store.selectedClusterName;
+      if (prop === 'currentTopicName') return store.currentTopicName;
+      if (prop === 'topicSettings') return store.topicSettings;
+
+      // Handle direct properties
+      return store[prop as keyof UIStateStore];
+    },
+    set(_target, prop: string, value: unknown) {
+      const store = useUIStateStore.getState();
+
+      // Handle properties with special setters
+      if (prop === 'pageTitle') {
+        store.setPageTitle(value as string | React.ReactElement);
+        return true;
+      }
+      if (prop === 'pageBreadcrumbs') {
+        store.setPageBreadcrumbs(value as BreadcrumbEntry[]);
+        return true;
+      }
+      if (prop === 'shouldHidePageHeader') {
+        store.setShouldHidePageHeader(value as boolean);
+        return true;
+      }
+      if (prop === 'pathName') {
+        store.setPathName(value as string);
+        return true;
+      }
+      if (prop === 'currentTopicName') {
+        store.setCurrentTopicName(value as string | undefined);
+        return true;
+      }
+      if (prop === 'loginError') {
+        store.setLoginError(value as string | null);
+        return true;
+      }
+      if (prop === 'isUsingDebugUserLogin') {
+        store.setIsUsingDebugUserLogin(value as boolean);
+        return true;
+      }
+      if (prop === 'serverBuildTimestamp') {
+        store.setServerBuildTimestamp(value as number | undefined);
+        return true;
+      }
+      if (prop === 'backLink') {
+        store.setBackLink(value as BackLink | null);
+        return true;
+      }
+
+      return true;
+    },
+  }
+);
+
+export function setPageHeader(
+  title: string | React.ReactElement,
+  breadcrumbs: BreadcrumbEntry[],
+  backLink?: BackLink | null
+) {
+  useUIStateStore.getState().setPageState(title, breadcrumbs, backLink);
+}

@@ -1,0 +1,90 @@
+/**
+ * Copyright 2025 Redpanda Data, Inc.
+ *
+ * Use of this software is governed by the Business Source License
+ * included in the file https://github.com/redpanda-data/redpanda/blob/dev/licenses/bsl.md
+ *
+ * As of the Change Date specified in that file, in accordance with
+ * the Business Source License, use of this software will be governed
+ * by the Apache License, Version 2.0
+ */
+
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from 'components/redpanda-ui/components/alert-dialog';
+import { Button } from 'components/redpanda-ui/components/button';
+import { Input } from 'components/redpanda-ui/components/input';
+import { InlineCode } from 'components/redpanda-ui/components/typography';
+import { useState } from 'react';
+
+type DeleteShadowLinkDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  shadowLinkName: string;
+  onConfirm: () => void;
+  isLoading?: boolean;
+};
+
+export const DeleteShadowLinkDialog = ({
+  open,
+  onOpenChange,
+  shadowLinkName,
+  onConfirm,
+  isLoading,
+}: DeleteShadowLinkDialogProps) => {
+  const [confirmationText, setConfirmationText] = useState('');
+
+  const isDeleteConfirmed = confirmationText.toLowerCase() === 'delete';
+
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen) {
+      setConfirmationText(''); // Cleanup on close
+    }
+    onOpenChange(newOpen);
+  };
+
+  const handleConfirm = () => {
+    if (isDeleteConfirmed) {
+      onConfirm();
+    }
+  };
+
+  return (
+    <AlertDialog onOpenChange={handleOpenChange} open={open}>
+      <AlertDialogContent>
+        <AlertDialogHeader className="text-left">
+          <AlertDialogTitle>Delete Shadowlink</AlertDialogTitle>
+          <AlertDialogDescription className="space-y-4">
+            <div className="text-body">
+              You are about to delete <InlineCode>{shadowLinkName}</InlineCode>
+            </div>
+            <div className="text-body">
+              This action will cause data loss. To confirm, type "delete" into the confirmation box below.
+            </div>
+            <Input
+              className="mt-4"
+              onChange={(e) => setConfirmationText(e.target.value)}
+              placeholder='Type "delete" to confirm'
+              value={confirmationText}
+            />
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel render={<Button variant="secondary-ghost">Cancel</Button>} />
+          <AlertDialogAction
+            disabled={!isDeleteConfirmed || isLoading}
+            onClick={handleConfirm}
+            render={<Button variant="destructive">{isLoading ? 'Deleting...' : 'Delete'}</Button>}
+          />
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+};
